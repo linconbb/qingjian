@@ -38,10 +38,19 @@ impl ITfActiveLanguageProfileNotifySink_Impl for ProfileSink_Impl {
     fn OnActivated(
         &self,
         clsid: *const GUID,
-        _guidprofile: *const GUID,
+        guidprofile: *const GUID,
         factivated: BOOL,
     ) -> Result<()> {
-        if factivated.as_bool() && unsafe { *clsid } != super::CLSID_QINGJIAN {
+        let clsid_value = (!clsid.is_null()).then(|| unsafe { *clsid });
+        let profile_value = (!guidprofile.is_null()).then(|| unsafe { *guidprofile });
+        let qingjian = clsid_value == Some(super::CLSID_QINGJIAN);
+        log(&format!(
+            "输入法 profile 事件 activated={} qingjian={} clsid={clsid_value:?} profile={profile_value:?} session={:?}",
+            factivated.as_bool(),
+            qingjian,
+            self.session
+        ));
+        if factivated.as_bool() && !qingjian {
             let sent = connect_default()
                 .map_err(|e| e.to_string())
                 .and_then(|stream| {

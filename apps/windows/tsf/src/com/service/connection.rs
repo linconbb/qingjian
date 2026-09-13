@@ -14,14 +14,27 @@ impl TextService_Impl {
     pub(super) fn connect(&self) {
         let session = SessionId(self.client_id.get() as u64);
         let app = crate::com::host_app_name();
-        let connected = connect_default()
-            .map_err(|e| e.to_string())
-            .and_then(|stream| EngineClient::open(stream, session, app).map_err(|e| e.to_string()));
+        log(&format!(
+            "Server IPC 连接开始 session={session:?} app={:?}",
+            app.as_deref().unwrap_or("<unknown>")
+        ));
+        let connected = match connect_default() {
+            Ok(stream) => {
+                log(&format!("Server 命名管道已连接 session={session:?}"));
+                EngineClient::open(stream, session, app).map_err(|e| e.to_string())
+            }
+            Err(error) => {
+                log(&format!(
+                    "Server 命名管道连接失败 session={session:?}: {error}"
+                ));
+                Err(error.to_string())
+            }
+        };
         match connected {
             Ok(client) => {
                 *self.engine.borrow_mut() = Some(client);
                 self.last_connect_failure.set(None);
-                log("已连上 Server");
+                log(&format!("Server 会话已打开 session={session:?}"));
             }
             Err(error) => {
                 self.last_connect_failure.set(Some(Instant::now()));
@@ -35,6 +48,7 @@ impl TextService_Impl {
     /// 没连上就重连一次（距上次失败不到 [`RECONNECT_INTERVAL`] 则跳过）。返回此刻是否连着。
     pub(super) fn ensure_connected(&self) -> bool {
         if self.engine.borrow().is_some() {
+            log("Server IPC 状态 connected=true");
             return true;
         }
         let recently_failed = self
@@ -42,14 +56,25 @@ impl TextService_Impl {
             .get()
             .is_some_and(|at| at.elapsed() < RECONNECT_INTERVAL);
         if recently_failed {
+            log("Server IPC 状态 connected=false retry=backoff");
             return false;
         }
         self.connect();
-        self.engine.borrow().is_some()
+        let connected = self.engine.borrow().is_some();
+        log(&format!(
+            "Server IPC 重连结果 connected={connected} retry=attempted"
+        ));
+        connected
     }
 
     /// 转发失败后断开，下一键重连。
     pub(super) fn disconnect(&self) {
+        log(&format!(
+            "Server IPC 主动断开 connected_before={} composing={} composition={}",
+            self.engine.borrow().is_some(),
+            self.shared.composing(),
+            self.shared.has_composition()
+        ));
         *self.engine.borrow_mut() = None;
         self.last_connect_failure.set(None);
         self.shared.end_composing();

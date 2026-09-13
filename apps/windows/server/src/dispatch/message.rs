@@ -103,6 +103,22 @@ impl Router {
     }
 
     fn handle_key(&mut self, session: SessionId, event: KeyEvent) -> ServerMessage {
+        let modifiers = event.modifiers;
+        tracing::debug!(
+            ?session,
+            vk = event.virtual_key,
+            character = ?event.character,
+            ctrl = modifiers.ctrl,
+            alt = modifiers.alt,
+            shift = modifiers.shift,
+            win = modifiers.win,
+            caps = modifiers.caps,
+            english = modifiers.english_mode,
+            focused = ?self.focused,
+            composing = !self.engine.composition().is_empty(),
+            translating = self.translation.is_some(),
+            "Server 开始处理按键"
+        );
         self.ensure_focus(session);
         self.notice = None;
         if self.translation.is_some() {
@@ -135,6 +151,18 @@ impl Router {
         self.poll_prediction();
         let frame = self.current_frame();
         self.reconcile_candidates(&frame);
+        tracing::debug!(
+            ?session,
+            vk = event.virtual_key,
+            character = ?event.character,
+            ?outcome,
+            commit = ?commit,
+            frame_empty = frame.is_empty(),
+            candidates = frame.candidates.items.len(),
+            composing = !self.engine.composition().is_empty(),
+            focused = ?self.focused,
+            "Server 完成处理按键"
+        );
         ServerMessage::KeyResult {
             session,
             outcome,

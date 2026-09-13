@@ -8,6 +8,7 @@ use std::fs::File;
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Instant;
 
@@ -31,6 +32,8 @@ use crate::dispatch::Router;
 pub use qingjian_platform::protocol::DEFAULT_PIPE_NAME;
 
 const BUFFER_SIZE: u32 = 64 * 1024;
+
+static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
 
 /// 管道的 SDDL：放行 Everyone / ALL APPLICATION PACKAGES / ALL RESTRICTED APPLICATION PACKAGES，
 /// 完整性标 Low。任务栏搜索、设置这类 AppContainer 进程在默认 DACL 下连不上。
@@ -96,7 +99,9 @@ fn accept_loop(name: &HSTRING, first: File, sender: Sender<Work>) {
             }
         };
         let sender = sender.clone();
-        thread::spawn(move || serve_connection(stream, sender));
+        let connection = NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed);
+        tracing::info!(connection, "TSF 客户端命名管道已连接");
+        thread::spawn(move || serve_connection(stream, sender, connection));
         instance = create_instance(name, descriptor, false);
     }
 }
@@ -166,7 +171,7 @@ fn wait_client(stream: File) -> io::Result<File> {
 }
 
 /// 服务一条连接：读消息 → 转给工人线程 → 写回，直到对端在帧边界关闭或出错。
-fn serve_connection(mut stream: File, sender: Sender<Work>) {
+fn serve_connection(mut stream: File, sender: Sender<Work>, connection: u64) {
     let (reply_sender, reply_receiver) = mpsc::channel::<Option<ServerMessage>>();
     loop {
         let message = match read_message::<_, ClientMessage>(&mut stream) {
@@ -177,6 +182,7 @@ fn serve_connection(mut stream: File, sender: Sender<Work>) {
                 break;
             }
         };
+        tracing::debug!(connection, kind = message_kind(&message), "收到 TSF IPC 消息");
         if sender
             .send(Work::Client(message, reply_sender.clone()))
             .is_err()
@@ -194,5 +200,23 @@ fn serve_connection(mut stream: File, sender: Sender<Work>) {
         }
     }
     let _ = unsafe { DisconnectNamedPipe(HANDLE(stream.as_raw_handle())) };
-    tracing::debug!("客户端断开");
+    tracing::info!(connection, "TSF 客户端命名管道已断开");
+}
+
+fn message_kind(message: &ClientMessage) -> &'static str {
+    match message {
+        ClientMessage::OpenSession { .. } => "OpenSession",
+        ClientMessage::Key { .. } => "Key",
+        ClientMessage::Poll { .. } => "Poll",
+        ClientMessage::Commit { .. } => "Commit",
+        ClientMessage::Surrounding { .. } => "Surrounding",
+        ClientMessage::Privacy { .. } => "Privacy",
+        ClientMessage::Selection { .. } => "Selection",
+        ClientMessage::PositionCandidates { .. } => "PositionCandidates",
+        ClientMessage::HideCandidates { .. } => "HideCandidates",
+        ClientMessage::ModeChanged { .. } => "ModeChanged",
+        ClientMessage::SyncMode { .. } => "SyncMode",
+        ClientMessage::ImeSwitched { .. } => "ImeSwitched",
+        ClientMessage::CloseSession { .. } => "CloseSession",
+    }
 }

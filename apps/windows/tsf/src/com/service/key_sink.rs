@@ -20,13 +20,31 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
     /// 获焦：补一次连接（Server 起晚了 / 重启过），并刷指示器（系统会在切换焦点时重置它）。
     /// 失焦：把敲了一半的拼音原样落定（对应 macOS 的 `commitComposition`）。
     fn OnSetFocus(&self, fforeground: BOOL) -> Result<()> {
-        self.shared.set_foreground(fforeground.as_bool());
-        if fforeground.as_bool() {
-            self.ensure_connected();
+        let foreground = fforeground.as_bool();
+        log(&format!(
+            "OnSetFocus 进入 foreground={foreground} previous={} connected={} composing={} composition={} translating={}",
+            self.shared.foreground(),
+            self.engine.borrow().is_some(),
+            self.shared.composing(),
+            self.shared.has_composition(),
+            self.shared.translating()
+        ));
+        self.shared.set_foreground(foreground);
+        if foreground {
+            let connected = self.ensure_connected();
+            log(&format!("OnSetFocus 获焦连接结果 connected={connected}"));
             self.refresh_mode_indicator();
         } else {
             self.commit_pending();
         }
+        log(&format!(
+            "OnSetFocus 完成 foreground={} connected={} composing={} composition={} translating={}",
+            self.shared.foreground(),
+            self.engine.borrow().is_some(),
+            self.shared.composing(),
+            self.shared.has_composition(),
+            self.shared.translating()
+        ));
         Ok(())
     }
 
@@ -34,35 +52,68 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
     fn OnTestKeyDown(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
         let vk = wparam.0 as u32;
         self.note_key_down(vk, lparam);
-        if self.keyboard_disabled(&pic) {
-            return Ok(FALSE);
-        }
-        Ok(self.would_eat(&self.key_event(vk)).into())
+        let event = self.key_event(vk);
+        let disabled = self.keyboard_disabled(&pic);
+        let would_eat = !disabled && self.would_eat(&event);
+        self.log_key_callback("OnTestKeyDown", "result", &event, lparam, disabled, would_eat, None);
+        Ok(would_eat.into())
     }
 
     fn OnKeyDown(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
         let vk = wparam.0 as u32;
         self.note_key_down(vk, lparam);
-        if self.keyboard_disabled(&pic) {
+        let event = self.key_event(vk);
+        let disabled = self.keyboard_disabled(&pic);
+        let would_eat = !disabled && self.would_eat(&event);
+        self.log_key_callback("OnKeyDown", "enter", &event, lparam, disabled, would_eat, None);
+        if disabled {
             return Ok(FALSE);
         }
-        let event = self.key_event(vk);
-        Ok(self.handle_key(pic, event).into())
+        let consumed = self.handle_key(pic, event);
+        self.log_key_callback(
+            "OnKeyDown",
+            "exit",
+            &event,
+            lparam,
+            disabled,
+            would_eat,
+            Some(consumed),
+        );
+        Ok(consumed.into())
     }
 
-    fn OnTestKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
-        self.note_key_up(wparam.0 as u32);
+    fn OnTestKeyUp(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        let vk = wparam.0 as u32;
+        self.note_key_up(vk);
+        let event = self.key_event(vk);
+        let disabled = self.keyboard_disabled(&pic);
+        self.log_key_callback("OnTestKeyUp", "result", &event, lparam, disabled, false, Some(false));
         Ok(FALSE)
     }
 
-    fn OnKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
-        self.note_key_up(wparam.0 as u32);
+    fn OnKeyUp(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        let vk = wparam.0 as u32;
+        self.note_key_up(vk);
+        let event = self.key_event(vk);
+        let disabled = self.keyboard_disabled(&pic);
+        self.log_key_callback("OnKeyUp", "result", &event, lparam, disabled, false, Some(false));
         Ok(FALSE)
     }
 
     /// 翻译选中文字的保留键命中：当作按下了那个组合键转发给 Server（绕过 `would_eat`）。
     fn OnPreservedKey(&self, pic: Ref<ITfContext>, rguid: *const GUID) -> Result<BOOL> {
-        if unsafe { *rguid } != preserved::GUID_TRANSLATE || self.keyboard_disabled(&pic) {
+        let guid = (!rguid.is_null()).then(|| unsafe { *rguid });
+        let disabled = self.keyboard_disabled(&pic);
+        log(&format!(
+            "OnPreservedKey guid={guid:?} translate={} keyboard_disabled={disabled} registered={:?} foreground={} connected={} composing={} composition={}",
+            guid == Some(preserved::GUID_TRANSLATE),
+            self.translate_combo.get(),
+            self.shared.foreground(),
+            self.engine.borrow().is_some(),
+            self.shared.composing(),
+            self.shared.has_composition()
+        ));
+        if guid != Some(preserved::GUID_TRANSLATE) || disabled {
             return Ok(FALSE);
         }
         let Some(combo) = self.translate_combo.get() else {
@@ -74,6 +125,38 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
 }
 
 impl TextService_Impl {
+    #[allow(clippy::too_many_arguments)]
+    fn log_key_callback(
+        &self,
+        callback: &str,
+        phase: &str,
+        event: &KeyEvent,
+        lparam: LPARAM,
+        keyboard_disabled: bool,
+        would_eat: bool,
+        consumed: Option<bool>,
+    ) {
+        let modifiers = event.modifiers;
+        log(&format!(
+            "{callback} phase={phase} vk={} char={:?} lparam={:#x} ctrl={} alt={} shift={} win={} caps={} en={} foreground={} keyboard_disabled={keyboard_disabled} would_eat={would_eat} consumed={consumed:?} connected={} composing={} composition={} translating={} server_stale={}",
+            event.virtual_key,
+            event.character,
+            lparam.0,
+            modifiers.ctrl,
+            modifiers.alt,
+            modifiers.shift,
+            modifiers.win,
+            modifiers.caps,
+            modifiers.english_mode,
+            self.shared.foreground(),
+            self.engine.borrow().is_some(),
+            self.shared.composing(),
+            self.shared.has_composition(),
+            self.shared.translating(),
+            self.shared.server_stale()
+        ));
+    }
+
     /// 没在组句时看上下文有没有禁键盘（密码框）：禁了整键放行、不组句。组句中不看——那段组句是我们自己的，
     /// 应用要禁会先终止它。每键两次 compartment 读取，微秒级。
     fn keyboard_disabled(&self, pic: &Ref<ITfContext>) -> bool {
@@ -142,9 +225,24 @@ impl TextService_Impl {
 
     /// 把按键送给 Server 并按结果更新文档；返回吃不吃。
     fn forward_key(&self, pic: Ref<ITfContext>, event: KeyEvent) -> bool {
+        log(&format!(
+            "Server IPC Key 开始 vk={} char={:?} connected={} foreground={} composing={} composition={} translating={}",
+            event.virtual_key,
+            event.character,
+            self.engine.borrow().is_some(),
+            self.shared.foreground(),
+            self.shared.composing(),
+            self.shared.has_composition(),
+            self.shared.translating()
+        ));
         // 没连上 Server：快捷键组合归应用（别吞了 Ctrl+C），其余吃掉别让拼音漏进应用。
         if !self.ensure_connected() {
-            return !event.modifiers.has_command_key();
+            let consumed = !event.modifiers.has_command_key();
+            log(&format!(
+                "Server IPC Key 未发送 connected=false vk={} fallback_consumed={consumed}",
+                event.virtual_key
+            ));
+            return consumed;
         }
         if let Ok(context) = pic.ok() {
             self.shared.set_last_context(Some(context.clone()));
@@ -153,6 +251,10 @@ impl TextService_Impl {
         let next = {
             let mut guard = self.engine.borrow_mut();
             let Some(client) = guard.as_mut() else {
+                log(&format!(
+                    "Server IPC Key 中止：客户端借用后为空 vk={} fallback_consumed=true",
+                    event.virtual_key
+                ));
                 return true;
             };
             // 组句被应用终止过：先让 Server 清掉残留的拼音（文本已在文档里，交出的丢弃）。
@@ -170,15 +272,17 @@ impl TextService_Impl {
                     let consumed = matches!(response.outcome, KeyOutcome::Consumed);
                     let m = event.modifiers;
                     log(&format!(
-                        "收键 vk={} ctrl={} alt={} shift={} caps={} en={} char={:?} candidates={} preedit={preedit:?} consumed={consumed}",
+                        "Server IPC Key 成功 vk={} ctrl={} alt={} shift={} win={} caps={} en={} char={:?} candidates={} preedit={preedit:?} commit={:?} consumed={consumed}",
                         event.virtual_key,
                         m.ctrl,
                         m.alt,
                         m.shift,
+                        m.win,
                         m.caps,
                         m.english_mode,
                         event.character,
-                        response.frame.candidates.items.len()
+                        response.frame.candidates.items.len(),
+                        response.commit
                     ));
                     Next::Document {
                         commit: response.commit,

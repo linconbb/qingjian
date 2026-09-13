@@ -62,6 +62,10 @@ impl Shared {
         self.server_stale.replace(false)
     }
 
+    pub(crate) fn server_stale(&self) -> bool {
+        self.server_stale.get()
+    }
+
     pub(crate) fn composing(&self) -> bool {
         self.composing.get()
     }

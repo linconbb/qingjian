@@ -89,16 +89,19 @@ fn with_active(f: impl FnOnce(&TextService_Impl)) {
 
 /// 用户点了语言栏的中 / 英按钮（见 [`ModeButton`](crate::com::mode::ModeButton)）：翻转模式。
 pub(super) fn toggle_mode() {
+    super::log::log("语言栏中英按钮事件");
     with_active(|service| service.set_english_mode(!service.mode_state.english()));
 }
 
 /// 「转换模式」compartment 变了（见 [`conversion`](crate::com::mode::conversion)）。
 pub(super) fn on_conversion_mode_changed() {
+    super::log::log("转换模式 compartment 事件");
     with_active(TextService_Impl::sync_from_conversion_mode);
 }
 
 /// 轮询取到了状态条上点出的目标模式（见 [`super::poll`]）；与当前相同就不动。
 pub(super) fn on_mode_sync(english: bool) {
+    super::log::log(&format!("Server 状态条模式同步事件 english={english}"));
     with_active(|service| {
         if service.mode_state.english() != english {
             service.set_english_mode(english);

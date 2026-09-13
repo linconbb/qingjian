@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use windows::Win32::Foundation::SYSTEMTIME;
 use windows::Win32::System::SystemInformation::GetLocalTime;
+use windows::Win32::System::Threading::GetCurrentThreadId;
 
 /// 留几天的日志。
 const KEEP_DAYS: u32 = 7;
@@ -33,7 +34,16 @@ pub(crate) fn log(message: &str) {
     else {
         return;
     };
-    let _ = writeln!(file, "{} [pid {}] {message}", now(&t), std::process::id());
+    let host = crate::com::host_app_name().unwrap_or_else(|| "<unknown>".to_owned());
+    let tid = unsafe { GetCurrentThreadId() };
+    let _ = writeln!(
+        file,
+        "{} [pid {} tid {} host {:?}] {message}",
+        now(&t),
+        std::process::id(),
+        tid,
+        host
+    );
 }
 
 fn file_name(t: &SYSTEMTIME) -> String {

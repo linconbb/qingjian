@@ -41,6 +41,12 @@ pub(crate) fn apply(
     commit: Option<&str>,
     preedit: &str,
 ) -> Result<()> {
+    super::log::log(&format!(
+        "组句 apply 开始 commit={commit:?} preedit={preedit:?} composing={} composition={} foreground={}",
+        shared.composing(),
+        shared.has_composition(),
+        shared.foreground()
+    ));
     if let Some(text) = commit {
         commit_text(shared, context, ec, text)?;
     }
@@ -58,6 +64,12 @@ pub(crate) fn apply(
         }
     }
     report_caret(shared, engine, context, ec);
+    super::log::log(&format!(
+        "组句 apply 完成 composing={} composition={} foreground={}",
+        shared.composing(),
+        shared.has_composition(),
+        shared.foreground()
+    ));
     Ok(())
 }
 
@@ -104,6 +116,11 @@ fn report_caret(shared: &Shared, engine: &SharedClient, context: &ITfContext, ec
 
 /// 有组句就把组句范围替换成 `text` 再结束组句，否则在选区插入。
 fn commit_text(shared: &Shared, context: &ITfContext, ec: u32, text: &str) -> Result<()> {
+    super::log::log(&format!(
+        "组句 commit_text 开始 text={text:?} chars={} composition={}",
+        text.chars().count(),
+        shared.has_composition()
+    ));
     let utf16: Vec<u16> = text.encode_utf16().collect();
     match shared.composition() {
         Some(composition) => {
@@ -123,10 +140,15 @@ fn commit_text(shared: &Shared, context: &ITfContext, ec: u32, text: &str) -> Re
             move_selection_to_end(context, ec, &range)?;
         }
     }
+    super::log::log("组句 commit_text 完成");
     Ok(())
 }
 
 fn update_preedit(shared: &Rc<Shared>, context: &ITfContext, ec: u32, preedit: &str) -> Result<()> {
+    let starting = !shared.has_composition();
+    super::log::log(&format!(
+        "组句 update_preedit 开始 starting={starting} preedit={preedit:?}"
+    ));
     let composition = match shared.composition() {
         Some(composition) => composition,
         None => start_composition(shared, context, ec)?,
@@ -135,7 +157,13 @@ fn update_preedit(shared: &Rc<Shared>, context: &ITfContext, ec: u32, preedit: &
     let range = unsafe { composition.GetRange()? };
     unsafe { range.SetText(ec, 0, &utf16)? };
     super::display_attribute::mark(context, ec, &range);
-    move_selection_to_end(context, ec, &range)
+    move_selection_to_end(context, ec, &range)?;
+    super::log::log(&format!(
+        "组句 update_preedit 完成 starting={starting} composition={} composing={}",
+        shared.has_composition(),
+        shared.composing()
+    ));
+    Ok(())
 }
 
 /// 在当前选区处起一个空组句；组句 sink 交给框架持有。
@@ -146,15 +174,20 @@ fn start_composition(shared: &Rc<Shared>, context: &ITfContext, ec: u32) -> Resu
     let sink: ITfCompositionSink = CompositionSink::new(shared.clone()).into();
     let composition = unsafe { context_composition.StartComposition(ec, &range, &sink)? };
     shared.set_composition(Some(composition.clone()));
+    super::log::log("组句 StartComposition 成功");
     Ok(composition)
 }
 
 /// 清空组句文本再结束，避免残留拼音。
 fn end_composition(shared: &Shared, ec: u32) -> Result<()> {
     if let Some(composition) = shared.take_composition() {
+        super::log::log("组句 EndComposition 开始");
         let range = unsafe { composition.GetRange()? };
         unsafe { range.SetText(ec, 0, &[])? };
         unsafe { composition.EndComposition(ec)? };
+        super::log::log("组句 EndComposition 完成");
+    } else {
+        super::log::log("组句 EndComposition 跳过：当前无 composition");
     }
     Ok(())
 }

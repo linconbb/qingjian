@@ -1,0 +1,96 @@
+# Windows TSF 诊断分支专用：只编 Windows 壳、跑 Windows 测试并上传可安装 artifact。
+# 不打标签、不建正式 Release，也不会触发 macOS job；产品数据固定从上游 data Release 获取。
+name: windows-diagnostics
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [diagnostics/windows-tsf-full-logging]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-diagnostics-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  QINGJIAN_UIACCESS: '0'
+  PYTHON: python
+  PYTHONUTF8: '1'
+
+jobs:
+  build:
+    name: Test and build Windows diagnostic installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.96.0
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy (Server, TSF DLL, Settings)
+        run: cargo clippy -p qingjian-windows-server -p qingjian-windows-tsf -p qingjian-windows-settings --all-targets --locked -- -D warnings
+
+      - name: Test (Server, TSF DLL, Settings)
+        run: cargo test -p qingjian-windows-server -p qingjian-windows-tsf -p qingjian-windows-settings --locked
+
+      - name: Fetch upstream product data
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p data/generated data/model
+          gh release download data --repo qingjian-team/qingjian \
+            --pattern qingjian-data.tar.gz --pattern model.qjm --pattern SHA256SUMS --dir data
+          (cd data && grep -E 'qingjian-data.tar.gz|model.qjm' SHA256SUMS | sha256sum -c -)
+          tar -xzf data/qingjian-data.tar.gz -C data/generated
+          mv data/model.qjm data/model/
+
+      - name: Install Inno Setup 7.1.0
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe'
+          $expected = '0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f'
+          $exe = Join-Path $env:RUNNER_TEMP 'innosetup.exe'
+          Invoke-WebRequest -Uri $url -OutFile $exe
+          $actual = (Get-FileHash -Path $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Inno Setup 安装程序 SHA-256 不符：$actual" }
+          Start-Process -FilePath $exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-' -Wait
+          & "${env:ProgramFiles}\Inno Setup 7\ISCC.exe" --version
+
+      - name: Build Windows diagnostic installer
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1
+
+      - name: Write checksums and build info
+        shell: bash
+        run: |
+          cd target/installer
+          sha256sum ./*.exe | tee SHA256SUMS
+          jq -n --arg version "$(sed -n 's/^version = "\(.*\)"/\1/p' ../../apps/windows/server/Cargo.toml | head -1)" \
+            --arg branch "$GITHUB_REF_NAME" --arg commit "$GITHUB_SHA" --arg run_id "$GITHUB_RUN_ID" \
+            --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg toolchain "$(rustc --version)" \
+            '{version: $version, branch: $branch, commit: $commit, run_id: $run_id, built_at: $built_at, toolchain: $toolchain, diagnostic: true}' \
+            | tee build-info.json
+
+      - name: Upload Windows diagnostic installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Qingjian-Windows-TSF-Diagnostics-${{ github.run_number }}
+          path: |
+            target/installer/*.exe
+            target/installer/SHA256SUMS
+            target/installer/build-info.json
+          if-no-files-found: error
+          retention-days: 14

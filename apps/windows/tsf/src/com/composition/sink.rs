@@ -27,7 +27,12 @@ impl ITfCompositionSink_Impl for CompositionSink_Impl {
         _ecwrite: u32,
         _composition: Ref<ITfComposition>,
     ) -> Result<()> {
-        log("组句被应用终止，清本地状态");
+        log(&format!(
+            "OnCompositionTerminated：组句被应用终止 composing={} composition={} foreground={}",
+            self.shared.composing(),
+            self.shared.has_composition(),
+            self.shared.foreground()
+        ));
         self.shared.terminated();
         Ok(())
     }
