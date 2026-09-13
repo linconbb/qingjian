@@ -27,7 +27,9 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         let thread_mgr = match ptim.ok() {
             Ok(thread_mgr) => thread_mgr.clone(),
             Err(error) => {
-                log(&format!("Activate 失败：ITfThreadMgr 为空 client_id={tid}: {error}"));
+                log(&format!(
+                    "Activate 失败：ITfThreadMgr 为空 client_id={tid}: {error}"
+                ));
                 return Err(error);
             }
         };

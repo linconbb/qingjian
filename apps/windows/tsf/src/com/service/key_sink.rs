@@ -55,7 +55,15 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         let event = self.key_event(vk);
         let disabled = self.keyboard_disabled(&pic);
         let would_eat = !disabled && self.would_eat(&event);
-        self.log_key_callback("OnTestKeyDown", "result", &event, lparam, disabled, would_eat, None);
+        self.log_key_callback(
+            "OnTestKeyDown",
+            "result",
+            &event,
+            lparam,
+            disabled,
+            would_eat,
+            None,
+        );
         Ok(would_eat.into())
     }
 
@@ -65,7 +73,15 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         let event = self.key_event(vk);
         let disabled = self.keyboard_disabled(&pic);
         let would_eat = !disabled && self.would_eat(&event);
-        self.log_key_callback("OnKeyDown", "enter", &event, lparam, disabled, would_eat, None);
+        self.log_key_callback(
+            "OnKeyDown",
+            "enter",
+            &event,
+            lparam,
+            disabled,
+            would_eat,
+            None,
+        );
         if disabled {
             return Ok(FALSE);
         }
@@ -87,7 +103,15 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         self.note_key_up(vk);
         let event = self.key_event(vk);
         let disabled = self.keyboard_disabled(&pic);
-        self.log_key_callback("OnTestKeyUp", "result", &event, lparam, disabled, false, Some(false));
+        self.log_key_callback(
+            "OnTestKeyUp",
+            "result",
+            &event,
+            lparam,
+            disabled,
+            false,
+            Some(false),
+        );
         Ok(FALSE)
     }
 
@@ -96,7 +120,15 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         self.note_key_up(vk);
         let event = self.key_event(vk);
         let disabled = self.keyboard_disabled(&pic);
-        self.log_key_callback("OnKeyUp", "result", &event, lparam, disabled, false, Some(false));
+        self.log_key_callback(
+            "OnKeyUp",
+            "result",
+            &event,
+            lparam,
+            disabled,
+            false,
+            Some(false),
+        );
         Ok(FALSE)
     }
 

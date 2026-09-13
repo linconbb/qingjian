@@ -7,8 +7,8 @@
 use std::fs::File;
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::Instant;
 
@@ -182,7 +182,11 @@ fn serve_connection(mut stream: File, sender: Sender<Work>, connection: u64) {
                 break;
             }
         };
-        tracing::debug!(connection, kind = message_kind(&message), "收到 TSF IPC 消息");
+        tracing::debug!(
+            connection,
+            kind = message_kind(&message),
+            "收到 TSF IPC 消息"
+        );
         if sender
             .send(Work::Client(message, reply_sender.clone()))
             .is_err()
